@@ -33,6 +33,77 @@ contract ColdStart is Test {
         vm.startBroadcast(user);
 
         // your code
+        //
+        // Only entry point to the L2 is the L1 Delayed Inbox. Each retryable ticket
+        // we post is later run on the L2 by _relay() as our aliased address
+        // (user + 0x1111..1111): to.call{value: l2CallValue}(data), l2CallValue
+        // funded for free on the L2. CASHCAT lives in a Uniswap-V3-style pool
+        // (CASHCAT/WETH, 1% fee) reachable via SwapRouter02. Post three L1->L2
+        // messages our alias runs on the L2: wrap ETH->WETH, approve router, then
+        // exactInputSingle with recipient = `user` (the balance-check target).
+        // (all logic kept inside this block; split into scopes to avoid stack-too-deep)
+        address weth = 0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73;   // WETH on the L2
+        address router = 0xCaf681a66D020601342297493863E78C959E5cb2; // Uniswap SwapRouter02
+        uint24 poolFee = 10000;                                      // CASHCAT/WETH pool: 1%
+
+        // 1) wrap 1 ETH -> WETH on the L2 (alias becomes the WETH holder)
+        {
+            (bool success,) = INBOX.call{value: 1.012 ether}(
+                abi.encodeWithSignature(
+                    "createRetryableTicket(address,uint256,uint256,address,address,uint256,uint256,bytes)",
+                    weth,
+                    uint256(1 ether),
+                    uint256(0.01 ether),
+                    user,
+                    user,
+                    uint256(2_000_000),
+                    uint256(1 gwei),
+                    abi.encodeWithSignature("deposit()")
+                )
+            );
+            require(success, "ticket1(wrap) failed");
+        }
+
+        // 2) approve SwapRouter02 to spend the alias's WETH
+        {
+            (bool success,) = INBOX.call{value: 0.012 ether}(
+                abi.encodeWithSignature(
+                    "createRetryableTicket(address,uint256,uint256,address,address,uint256,uint256,bytes)",
+                    weth,
+                    uint256(0),
+                    uint256(0.01 ether),
+                    user,
+                    user,
+                    uint256(2_000_000),
+                    uint256(1 gwei),
+                    abi.encodeWithSignature("approve(address,uint256)", router, type(uint256).max)
+                )
+            );
+            require(success, "ticket2(approve) failed");
+        }
+
+        // 3) swap WETH -> CASHCAT via exactInputSingle, sending CASHCAT to `user`
+        //    params tuple: (tokenIn, tokenOut, fee, recipient, amountIn, amountOutMin, sqrtPriceLimit)
+        {
+            bytes memory swapCd = abi.encodePacked(
+                bytes4(0x04e45aaf),
+                abi.encode(weth, CASHCAT, poolFee, user, uint256(1 ether), uint256(1_000_000e18), uint160(0))
+            );
+            (bool success,) = INBOX.call{value: 0.012 ether}(
+                abi.encodeWithSignature(
+                    "createRetryableTicket(address,uint256,uint256,address,address,uint256,uint256,bytes)",
+                    router,
+                    uint256(0),
+                    uint256(0.01 ether),
+                    user,
+                    user,
+                    uint256(2_000_000),
+                    uint256(1 gwei),
+                    swapCd
+                )
+            );
+            require(success, "ticket3(swap) failed");
+        }
 
         vm.stopBroadcast();
 

@@ -16,6 +16,8 @@ contract Warmup is Test {
     function test_Solution() public {
         vm.startBroadcast(user);
         // Your solution goes here.
+        (bool success,) = payable(WETH).call{value: 1 ether}("");
+        success;
         vm.stopBroadcast();
         checkSolve();
     }
